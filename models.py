@@ -48,6 +48,7 @@ mongodb = mongo_client.get_database()
 redis = Redis.from_url(app.config["REDIS_URL"])
 
 log = logging.getLogger(__name__)
+log.setLevel(logging.DEBUG)
 
 
 class Users(UserMixin, db_sql.Model):

@@ -33,9 +33,6 @@ app.config.from_object(os.environ['APP_SETTINGS'])
 log = app.logger
 log.handlers = []
 
-# Turn off annoying logging for stravalib except for errors
-logging.getLogger("stravalib").setLevel(logging.ERROR)
-
 verbose_formatter = logging.Formatter(
     '[%(asctime)s] '
     '[%(levelname)s] '
@@ -47,14 +44,21 @@ verbose_formatter = logging.Formatter(
 sh = logging.StreamHandler(sys.stdout)
 sh.setFormatter(verbose_formatter)
 
-for name in [None, "models"]:
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    for h in [sh]:
-        logger.addHandler(h)
+
+# Turn off annoying logging for certain loggers except for errors
+# for name in ["connectionpool", "stravalib"]:
+#     logging.getLogger(name).setLevel(logging.ERROR)
+
+
+# for name in [None, "models"]:
+#     logger = logging.getLogger(name)
+#     logger.setLevel(logging.DEBUG)
+#     for h in [sh]:
+#         logger.addHandler(h)
+
 
 all_loggers = logging.Logger.manager.loggerDict
-log.debug("Logger Summary: {}".format(all_loggers))
+print("Logger Summary: {}".format(all_loggers))
 
 
 STREAMS_OUT = ["polyline", "time"]
