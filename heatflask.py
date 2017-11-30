@@ -43,7 +43,7 @@ verbose_formatter = logging.Formatter(
 
 sh = logging.StreamHandler(sys.stdout)
 sh.setFormatter(verbose_formatter)
-
+log.addHandler(sh)
 
 # Turn off annoying logging for certain loggers except for errors
 # for name in ["connectionpool", "stravalib"]:
