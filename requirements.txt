@@ -33,3 +33,4 @@ billiard==3.5.0.3
 base36==0.1.1
 backports.shutil-get-terminal-size==1.0.0
 anyjson==0.3.3
+ujson

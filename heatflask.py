@@ -1,8 +1,8 @@
 #! usr/bin/env python
-from __future__ import unicode_literals
+# from __future__ import unicode_literals
 
 import gevent
-from exceptions import StopIteration
+# from exceptions import StopIteration
 from functools import wraps
 
 from flask import (
@@ -13,6 +13,7 @@ from flask import (
 import flask_compress
 from datetime import datetime
 import sys
+import numpy
 import uuid
 import logging
 import os
@@ -29,9 +30,32 @@ from signal import signal, SIGPIPE, SIG_DFL
 
 app = Flask(__name__)
 app.config.from_object(os.environ['APP_SETTINGS'])
+log = app.logger
+log.handlers = []
 
-app.logger.addHandler(logging.StreamHandler(sys.stdout))
-app.logger.setLevel(logging.DEBUG)
+# Turn off annoying logging for stravalib except for errors
+logging.getLogger("stravalib").setLevel(logging.ERROR)
+
+verbose_formatter = logging.Formatter(
+    '[%(asctime)s] '
+    '[%(levelname)s] '
+    '[%(module)s.%(funcName)s] '
+    '%(message)s',
+    "%Y-%m-%d %H:%M:%S"
+)
+
+sh = logging.StreamHandler(sys.stdout)
+sh.setFormatter(verbose_formatter)
+
+for name in [None, "models"]:
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    for h in [sh]:
+        logger.addHandler(h)
+
+all_loggers = logging.Logger.manager.loggerDict
+log.debug("Logger Summary: {}".format(all_loggers))
+
 
 STREAMS_OUT = ["polyline", "time"]
 STREAMS_TO_CACHE = ["polyline", "time"]
@@ -39,7 +63,7 @@ STREAMS_TO_CACHE = ["polyline", "time"]
 
 sslify = SSLify(app, skips=["webhook_callback"])
 
-# models depend app so we import them afterwards
+# models depend on app so we import them afterwards
 from models import (
     Users, Activities, EventLogger, Utility, Webhooks, Indexes,
     db_sql, mongodb, redis
@@ -323,22 +347,22 @@ def auth_callback():
             access_token = client.exchange_code_for_token(**args)
 
         except Exception as e:
-            app.logger.error("authorization error:\n{}".format(e))
+            log.error("authorization error:\n{}".format(e))
             flash(str(e))
             return redirect(state)
 
         user_data = Users.strava_data_from_token(access_token)
-        # app.logger.debug("user data: {}".format(user_data))
+        # log.debug("user data: {}".format(user_data))
 
         try:
             user = Users.add_or_update(**user_data)
         except Exception as e:
-            app.logger.exception(e)
+            log.exception(e)
             user = None
         if user:
             # remember=True, for persistent login.
             login_user(user, remember=True)
-            # app.logger.debug("authenticated {}".format(user))
+            # log.debug("authenticated {}".format(user))
             EventLogger.new_event(msg="authenticated {}".format(user.id))
         else:
             app.loogger.error("user authenication error")
@@ -531,8 +555,8 @@ def update_share_status(username):
     db_sql.session.commit()
     user.cache()
 
-    app.logger.info("share status for {} set to {}"
-                    .format(user, status))
+    log.info("share status for {} set to {}"
+             .format(user, status))
 
     return jsonify(user=user.id, share=user.share_profile)
 
@@ -595,14 +619,14 @@ def get_query_key():
     key_timeout = query.get("key_timeout") or 10
     query = query.get("query") or query
     redis.setex("Q:" + key, json.dumps(query),  key_timeout)
-    # app.logger.debug("set key '{}' to {}".format(key, query))
+    # log.debug("set key '{}' to {}".format(key, query))
     return jsonify(key)
 
 
 @app.route('/getdata/<query_key>')
 def getdata_with_key(query_key):
     query_obj = redis.get("Q:" + query_key)
-    # app.logger.debug("retrieved key {} as {}".format(query_key, query_obj))
+    # log.debug("retrieved key {} as {}".format(query_key, query_obj))
 
     if not query_obj:
         return errout("invalid query_key")
@@ -617,7 +641,7 @@ def getdata_with_key(query_key):
                 if not user:
                     continue
 
-                # app.logger.debug("async job querying {}: {}"
+                # log.debug("async job querying {}: {}"
                 #                  .format(user, options))
                 options.update({
                     "pool": pool,
@@ -631,7 +655,7 @@ def getdata_with_key(query_key):
             pool.join()
             out_queue.put(None)
             out_queue.put(StopIteration)
-            # app.logger.debug("done")
+            # log.debug("done")
 
     pool = gevent.pool.Pool(app.config.get("CONCURRENCY"))
     out_queue = gevent.queue.Queue()
@@ -699,8 +723,8 @@ def cache_put(query_key):
             )
 
         except Exception as e:
-            app.logger.debug("error writing query {} to MongoDB: {}"
-                             .format(_id, e))
+            log.debug("error writing query {} to MongoDB: {}"
+                      .format(_id, e))
             return
 
     return jsonify(base36.dumps(_id))
@@ -860,10 +884,10 @@ def webhook_callback():
 
     if request.method == 'GET':
         if request.args.get("hub.challenge"):
-            app.logger.debug(
+            log.debug(
                 "subscription callback with {}".format(request.args))
             cb = Webhooks.handle_subscription_callback(request.args)
-            app.logger.debug(
+            log.debug(
                 "handle_subscription_callback returns {}".format(cb))
             return jsonify(cb)
 
@@ -874,8 +898,26 @@ def webhook_callback():
 
 
 # SSE (Server-Side Events) stuff
+class MyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, numpy.integer):
+            return int(obj)
+        elif isinstance(obj, numpy.floating):
+            return float(obj)
+        elif isinstance(obj, numpy.ndarray):
+            return obj.tolist()
+        else:
+            return super(MyEncoder, self).default(obj)
+
+
 def sse_out(obj=None):
-    data = json.dumps(obj) if obj else "done"
+    try:
+        data = json.dumps(obj, cls=MyEncoder) if obj else "done"
+    except Exception as e:
+        log.exception(e)
+        # log.debug("problem serializing {}".format(obj))
+        data = None
+
     return "data: {}\n\n".format(data)
 
 
@@ -888,7 +930,7 @@ def errout(msg):
 
 # makes python ignore sigpipe and prevents broken pipe exception when client
 #  aborts an SSE stream
-signal(SIGPIPE, SIG_DFL)
+# signal(SIGPIPE, SIG_DFL)
 
 # python heatmapp.py works but you really should use `flask run`
 if __name__ == '__main__':

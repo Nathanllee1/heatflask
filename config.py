@@ -154,7 +154,7 @@ class DevelopmentConfig(Config):
     (Developer's personal computer)
     """
     OFFLINE = os.environ.get("OFFLINE", False)
-    USE_LOCAL = os.environ.get("USE_LOCAL", False)
+    USE_LOCAL = os.environ.get("USE_LOCAL", True)
     DEVELOPMENT = True
     DEBUG = True
     CACHE_ACTIVITIES_TIMEOUT = 2 * 60 * 60
@@ -173,5 +173,8 @@ class DevelopmentConfig(Config):
         # in local environment,
         MONGODB_URI = "mongodb://localhost/heatflask"
 
-        STORE_INDEX_TIMEOUT = 365 * 24 * 60 * 60   # 365 days
-        STORE_ACTIVITIES_TIMEOUT = 365 * 24 * 60 * 60  # 365 days
+        # STORE_INDEX_TIMEOUT = 365 * 24 * 60 * 60   # 365 days
+        # STORE_ACTIVITIES_TIMEOUT = 365 * 24 * 60 * 60  # 365 days
+
+        STORE_INDEX_TIMEOUT = 10
+        STORE_ACTIVITIES_TIMEOUT = 10

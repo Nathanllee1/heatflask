@@ -15,15 +15,15 @@ import pandas as pd
 import gevent
 from gevent.queue import Queue
 from gevent.pool import Pool
-from exceptions import StopIteration
+# from exceptions import StopIteration
 import requests
 # from requests.exceptions import HTTPError
-import cPickle
+import pickle
 import msgpack
 from bson import ObjectId
 from bson.binary import Binary
 from heatflask import app
-
+import logging
 import os
 
 CONCURRENCY = app.config["CONCURRENCY"]
@@ -46,6 +46,8 @@ mongodb = mongo_client.get_database()
 
 # Redis data-store
 redis = Redis.from_url(app.config["REDIS_URL"])
+
+log = logging.getLogger(__name__)
 
 
 class Users(UserMixin, db_sql.Model):
@@ -95,7 +97,7 @@ class Users(UserMixin, db_sql.Model):
         return [attr for attr in attrs if getattr(state, attr)]
 
     def serialize(self):
-        return cPickle.dumps(self)
+        return pickle.dumps(self)
 
     def info(self):
         profile = {}
@@ -103,12 +105,12 @@ class Users(UserMixin, db_sql.Model):
         del profile["_sa_instance_state"]
         if "activity_index" in profile:
             del profile["activity_index"]
-        # app.logger.debug("{}: {}".format(self, profile))
+        # log.debug("{}: {}".format(self, profile))
         return profile
 
     @classmethod
     def from_serialized(cls, p):
-        return cPickle.loads(p)
+        return pickle.loads(p)
 
     def client(self):
         return stravalib.Client(
@@ -120,7 +122,7 @@ class Users(UserMixin, db_sql.Model):
         return "<User %r>" % (self.id)
 
     def get_id(self):
-        return unicode(self.id)
+        return str(self.id)
 
     def is_admin(self):
         return self.id in app.config["ADMIN"]
@@ -131,8 +133,8 @@ class Users(UserMixin, db_sql.Model):
         try:
             strava_user = client.get_athlete()
         except Exception as e:
-            app.logger.error("error getting user data from token: {}"
-                             .format(e))
+            log.error("error getting user data from token: {}"
+                      .format(e))
         else:
             return {
                 "id": strava_user.id,
@@ -155,14 +157,14 @@ class Users(UserMixin, db_sql.Model):
     def cache(self, identifier=None, timeout=CACHE_USERS_TIMEOUT):
         key = self.__class__.key(identifier or self.id)
         packed = self.serialize()
-        # app.logger.debug(
+        # log.debug(
         #     "caching {} with key '{}' for {} sec. size={}"
         #     .format(self, key, timeout, len(packed))
         # )
         return redis.setex(key, packed, timeout)
 
     def uncache(self):
-        # app.logger.debug("uncaching {}".format(self))
+        # log.debug("uncaching {}".format(self))
 
         # delete from cache too.  It may be under two different keys
         redis.delete(self.__class__.key(self.id))
@@ -178,7 +180,7 @@ class Users(UserMixin, db_sql.Model):
     @classmethod
     def add_or_update(cls, cache_timeout=CACHE_USERS_TIMEOUT, **kwargs):
         if not kwargs:
-            app.logger.debug("attempted to add_or_update user with no data")
+            log.debug("attempted to add_or_update user with no data")
             return
 
         # Creates a new user or updates an existing user (with the same id)
@@ -189,12 +191,12 @@ class Users(UserMixin, db_sql.Model):
 
         except Exception as e:
             db_sql.session.rollback()
-            app.logger.error(
+            log.error(
                 "error adding/updating user {}: {}".format(kwargs, e))
         else:
             if persistent_user:
                 persistent_user.cache(cache_timeout)
-                # app.logger.info("updated {} with {}"
+                # log.info("updated {} with {}"
                 #                 .format(persistent_user, kwargs))
             return persistent_user
 
@@ -206,7 +208,7 @@ class Users(UserMixin, db_sql.Model):
             redis.expire(key, CACHE_USERS_TIMEOUT)
             try:
                 user = cls.from_serialized(cached)
-                # app.logger.debug(
+                # log.debug(
                 #     "retrieved {} from cache with key {}".format(user, key))
                 return db_sql.session.merge(user, load=False)
             except Exception:
@@ -245,7 +247,7 @@ class Users(UserMixin, db_sql.Model):
             def user_data(user):
                 data = cls.strava_data_from_token(user.access_token)
                 # check = "valid" if user else "INVALID"
-                # app.logger.info(
+                # log.info(
                 #     "token for {} is {}".format(user, check)
                 # )
                 return data if data else user
@@ -264,7 +266,7 @@ class Users(UserMixin, db_sql.Model):
                     else:
                         user = cls.add_or_update(cache_timeout=60, **obj)
                         msg = "successfully updated {}".format(user)
-                    # app.logger.info(msg)
+                    # log.info(msg)
                     yield msg + "\n"
                     count += 1
 
@@ -278,7 +280,7 @@ class Users(UserMixin, db_sql.Model):
                     .format(num_deleted, count, count - num_deleted)
                 )
             except Exception as e:
-                app.logger.info("error: {}".format(e))
+                log.info("error: {}".format(e))
                 P.kill()
 
     @classmethod
@@ -309,8 +311,8 @@ class Users(UserMixin, db_sql.Model):
                 user_data.update(strava_data)
                 return user_data
             else:
-                app.logger.info("problem updating user {}"
-                                .format(user_data["id"]))
+                log.info("problem updating user {}"
+                         .format(user_data["id"]))
 
         if not users_list:
             doc = mongodb.users.find_one()
@@ -321,17 +323,17 @@ class Users(UserMixin, db_sql.Model):
 
         # erase user table
         result = db_sql.drop_all()
-        app.logger.info("dropping Users table: {}".format(result))
+        log.info("dropping Users table: {}".format(result))
 
         # delete all users from the Redis cache
         keys_to_delete = redis.keys(Users.key("*"))
         if keys_to_delete:
             result = redis.delete(*keys_to_delete)
-            app.logger.info("dropping cached User objects: {}".format(result))
+            log.info("dropping cached User objects: {}".format(result))
 
         # create new user table
         result = db_sql.create_all()
-        app.logger.info("creating Users table: {}".format(result))
+        log.info("creating Users table: {}".format(result))
 
         # rebuild table with user backup updated with current info from Strava
         count_before = len(users_list)
@@ -342,8 +344,8 @@ class Users(UserMixin, db_sql.Model):
                 user = cls.add_or_update(cache_timeout=10, **user_dict)
                 if user:
                     count += 1
-                    app.logger.debug("successfully restored/updated {}"
-                                     .format(user))
+                    log.debug("successfully restored/updated {}"
+                              .format(user))
         return {
             "operation": "users restore",
             "before": count_before,
@@ -354,14 +356,14 @@ class Users(UserMixin, db_sql.Model):
         try:
             result1 = mongodb.indexes.delete_one({'_id': self.id})
         except Exception as e:
-            app.logger.error("error deleting index {} from MongoDB:\n{}"
-                             .format(self, e))
+            log.error("error deleting index {} from MongoDB:\n{}"
+                      .format(self, e))
             result1 = e
 
         self.activity_index = None
         result2 = self.cache()
-        app.logger.debug("delete index for {}. mongo:{}, redis:{}"
-                         .format(self.id, vars(result1), result2))
+        log.debug("delete index for {}. mongo:{}, redis:{}"
+                  .format(self.id, vars(result1), result2))
 
         return result1, result2
 
@@ -382,7 +384,7 @@ class Users(UserMixin, db_sql.Model):
                 self.activity_index = (mongodb.indexes
                                        .find_one({"_id": self.id}))
             except Exception as e:
-                app.logger.error(
+                log.error(
                     "error accessing mongodb indexes collection:\n{}"
                     .format(e))
 
@@ -416,7 +418,7 @@ class Users(UserMixin, db_sql.Model):
             if out_queue is None:
                 pass
             else:
-                # app.logger.debug(msg)
+                # log.debug(msg)
                 out_queue.put(msg)
 
         before = self.__class__.to_datetime(before)
@@ -429,13 +431,13 @@ class Users(UserMixin, db_sql.Model):
             t1 = (not after) or (after <= dt)
             t2 = (not before) or (dt <= before)
             result = (t1 and t2)
-            # app.logger.info("{} <= {} <= {}: {}"
+            # log.info("{} <= {} <= {}: {}"
             #                 .format(after, dt, before, result))
             return result
 
         self.indexing(True)
         start_time = datetime.utcnow()
-        app.logger.debug("building activity index for {}".format(self.id))
+        log.debug("building activity index for {}".format(self.id))
 
         activities_list = []
         count = 0
@@ -475,7 +477,7 @@ class Users(UserMixin, db_sql.Model):
             gevent.sleep(0)
         except Exception as e:
             enqueue({"error": str(e)})
-            app.logger.error(e)
+            log.error(e)
         else:
             # If we are streaming to a client, this is where we tell it
             #  stop listening by pushing a StopIteration the queue
@@ -491,7 +493,7 @@ class Users(UserMixin, db_sql.Model):
                         .astype(Users.index_df_dtypes)
                         .sort_values(by="id", ascending=False))
 
-            # app.logger.info(index_df.info())
+            # log.info(index_df.info())
 
             packed = Binary(index_df.to_msgpack(compress='blosc'))
             self.activity_index = {
@@ -511,12 +513,12 @@ class Users(UserMixin, db_sql.Model):
                     {"$set": self.activity_index},
                     upsert=True)
 
-                # app.logger.info(
+                # log.info(
                 #     "inserted activity index for {} in MongoDB: {}"
                 #     .format(self, vars(result))
                 # )
             except Exception as e:
-                app.logger.error(
+                log.error(
                     "error wrtiting activity index for {} to MongoDB:\n{}"
                     .format(self, e)
                 )
@@ -530,7 +532,7 @@ class Users(UserMixin, db_sql.Model):
                         len(packed))
             )
 
-            app.logger.debug(msg)
+            log.debug(msg)
             EventLogger.new_event(msg=msg)
             enqueue({"msg": "done indexing {} activities.".format(count)})
 
@@ -555,7 +557,7 @@ class Users(UserMixin, db_sql.Model):
         index_df = index_df.set_index("id")
 
         activities_list = []
-        app.logger.info("Updating activity index for {}".format(self))
+        log.info("Updating activity index for {}".format(self))
 
         if activity_ids:
             for aid in activity_ids:
@@ -564,8 +566,8 @@ class Users(UserMixin, db_sql.Model):
                         self.client().get_activity(aid)
                     )
                 except Exception as e:
-                    app.logger.error("error getting {}'s activity {}: {}"
-                                     .format(self, aid, e))
+                    log.error("error getting {}'s activity {}: {}"
+                              .format(self, aid, e))
                 else:
                     activities_list.append(act)
         else:
@@ -579,7 +581,7 @@ class Users(UserMixin, db_sql.Model):
                     for a in self.client().get_activities(limit=10)
                 ]
             except Exception as e:
-                app.logger.error(
+                log.error(
                     "was not able to retrieve {}'s latest activity data: {}"
                     .format(self, e)
                 )
@@ -606,7 +608,7 @@ class Users(UserMixin, db_sql.Model):
                 .reset_index()
             )
 
-            # app.logger.info("after update: {}".format(index_df.info()))
+            # log.info("after update: {}".format(index_df.info()))
 
             to_update["packed_index"] = (
                 Binary(index_df.to_msgpack(compress='blosc'))
@@ -626,7 +628,7 @@ class Users(UserMixin, db_sql.Model):
                     {"$set": to_update}
                 )
             except Exception as e:
-                app.logger.debug(
+                log.debug(
                     "error updating activity index for {} in MongoDB:\n{}"
                     .format(self, e)
                 )
@@ -641,7 +643,7 @@ class Users(UserMixin, db_sql.Model):
                     round(elapsed.total_seconds(), 3))
         )
 
-        app.logger.info(msg)
+        log.info(msg)
         if to_update:
             return index_df
 
@@ -674,7 +676,7 @@ class Users(UserMixin, db_sql.Model):
             except AssertionError:
                 return [{"error": "Invalid Dates"}]
 
-        # app.logger.info("query_activities called with: {}".format({
+        # log.info("query_activities called with: {}".format({
         #     "activity_ids": activity_ids,
         #     "limit": limit,
         #     "after": after,
@@ -689,7 +691,7 @@ class Users(UserMixin, db_sql.Model):
         # }))
 
         def import_streams(client, queue, activity):
-            # app.logger.debug("importing {}".format(activity["id"]))
+            # log.debug("importing {}".format(activity["id"]))
 
             stream_data = Activities.import_streams(
                 client, activity["id"], STREAMS_TO_CACHE, cache_timeout)
@@ -698,7 +700,7 @@ class Users(UserMixin, db_sql.Model):
                     if s in stream_data}
             data.update(activity)
             queue.put(data)
-            # app.logger.debug("importing {}...queued!".format(activity["id"]))
+            # log.debug("importing {}...queued!".format(activity["id"]))
             gevent.sleep(0)
 
         pool = pool or Pool(CONCURRENCY)
@@ -757,7 +759,7 @@ class Users(UserMixin, db_sql.Model):
                         A = {"id": int(aid)}
                         if summaries:
                             A.update(index_df.loc[int(aid)].to_dict())
-                        # app.logger.debug(A)
+                        # log.debug(A)
                         yield A
                 gen = summary_gen()
 
@@ -777,7 +779,7 @@ class Users(UserMixin, db_sql.Model):
             else:
                 # Finally, if there is no index and rather than building one
                 # we are requested to get the summary data directily from Strava
-                # app.logger.info(
+                # log.info(
                 #     "{}: getting summaries from Strava without build"
                 #     .format(self))
                 gen = (
@@ -813,6 +815,7 @@ class Users(UserMixin, db_sql.Model):
 
             else:
                 stream_data = Activities.get(A["id"])
+                # log.debug("stream data: {}".format(stream_data))
 
                 if stream_data:
                     A.update(stream_data)
@@ -852,7 +855,7 @@ class Users(UserMixin, db_sql.Model):
         try:
             A = client.get_activity(int(activity_id))
         except Exception as e:
-            app.logger.info("Error getting this activity: {}".format(e))
+            log.info("Error getting this activity: {}".format(e))
         else:
             trivial_list.append(A)
 
@@ -861,7 +864,7 @@ class Users(UserMixin, db_sql.Model):
                 client.get_related_activities(int(activity_id)))
 
         except Exception as e:
-            app.logger.info("Error getting related activities: {}".format(e))
+            log.info("Error getting related activities: {}".format(e))
             return [{"error": str(e)}]
 
         for obj in itertools.chain(related_activities, trivial_list):
@@ -923,7 +926,7 @@ class Indexes(object):
             "dt_last_indexed",
             expireAfterSeconds=timeout
         )
-        app.logger.info("initialized Indexes collection with")
+        log.info("initialized Indexes collection with")
         return result
 
 
@@ -937,7 +940,7 @@ class Activities(object):
         try:
             result1 = mongodb.activities.drop()
         except Exception as e:
-            app.logger.debug(
+            log.debug(
                 "error deleting activities collection from MongoDB.\n{}"
                 .format(e))
             result1 = e
@@ -956,7 +959,7 @@ class Activities(object):
             "ts",
             expireAfterSeconds=timeout
         )
-        app.logger.info("initialized Activity collection")
+        log.info("initialized Activity collection")
         return result
 
     # This is a list of tuples specifying properties of the rendered objects,
@@ -1096,8 +1099,8 @@ class Activities(object):
                 upsert=True)
         except Exception as e:
             result2 = None
-            app.logger.debug("error writing activity {} to MongoDB: {}"
-                             .format(id, e))
+            log.debug("error writing activity {} to MongoDB: {}"
+                      .format(id, e))
         return result1, result2
 
     @classmethod
@@ -1108,7 +1111,7 @@ class Activities(object):
 
         if cached:
             redis.expire(key, timeout)  # reset expiration timeout
-            # app.logger.debug("got Activity {} from cache".format(id))
+            # log.debug("got Activity {} from cache".format(id))
             packed = cached
         else:
             try:
@@ -1118,7 +1121,7 @@ class Activities(object):
                 )
 
             except Exception as e:
-                app.logger.debug(
+                log.debug(
                     "error accessing activity {} from MongoDB:\n{}"
                     .format(id, e))
                 return
@@ -1126,9 +1129,10 @@ class Activities(object):
             if document:
                 packed = document["mpk"]
                 redis.setex(key, packed, timeout)
-                # app.logger.debug("got activity {} data from MongoDB".format(id))
+                # log.debug("got activity {} data from MongoDB".format(id))
         if packed:
-            return msgpack.unpackb(packed)
+            data = msgpack.unpackb(packed, encoding='utf-8')
+            return data
 
     @classmethod
     def import_streams(cls, client, activity_id, stream_names,
@@ -1145,10 +1149,10 @@ class Activities(object):
         except Exception as e:
             msg = ("Can't import streams for activity {}:\n{}"
                    .format(activity_id, e))
-            # app.logger.error(msg)
+            # log.error(msg)
             return {"error": msg}
 
-        activity_streams = {name: streams[name].data for name in streams}
+        activity_streams = {str(name): streams[name].data for name in streams}
 
         # Encode/compress latlng data into polyline format
         if "polyline" in stream_names:
@@ -1172,7 +1176,7 @@ class Activities(object):
                 except Exception as e:
                     msg = ("Can't encode stream '{}' for activity {} due to '{}':\n{}"
                            .format(s, activity_id, e, activity_streams[s]))
-                    app.logger.error(msg)
+                    log.error(msg)
                     return {"error": msg}
 
         output = {s: activity_streams[s] for s in stream_names}
@@ -1181,7 +1185,7 @@ class Activities(object):
 
     @classmethod
     def import_and_queue_streams(cls, client, queue, activity):
-        # app.logger.debug("importing {}".format(activity["id"]))
+        # log.debug("importing {}".format(activity["id"]))
 
         stream_data = cls.import_streams(
             client, activity["id"], STREAMS_TO_CACHE)
@@ -1190,7 +1194,7 @@ class Activities(object):
                 if s in stream_data}
         data.update(activity)
         queue.put(data)
-        # app.logger.debug("importing {}...queued!".format(activity["id"]))
+        # log.debug("importing {}...queued!".format(activity["id"]))
         gevent.sleep(0)
 
     @staticmethod
@@ -1278,7 +1282,7 @@ class Webhooks(object):
             mongodb.create_collection("subscription",
                                       capped=True,
                                       size=1 * 1024 * 1024)
-        app.logger.debug("create_subscription returns {}".format(subs))
+        log.debug("create_subscription returns {}".format(subs))
         return {"created": str(subs)}
 
     @classmethod
@@ -1305,7 +1309,7 @@ class Webhooks(object):
                 subscription_id)}
         else:
             result = {"error": "non-existent/incorrect subscription id"}
-        app.logger.error(result)
+        log.error(result)
         return result
 
     @classmethod
