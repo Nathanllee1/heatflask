@@ -46,15 +46,8 @@ sh.setFormatter(verbose_formatter)
 log.addHandler(sh)
 
 # Turn off annoying logging for certain loggers except for errors
-# for name in ["connectionpool", "stravalib"]:
-#     logging.getLogger(name).setLevel(logging.ERROR)
-
-
-# for name in [None, "models"]:
-#     logger = logging.getLogger(name)
-#     logger.setLevel(logging.DEBUG)
-#     for h in [sh]:
-#         logger.addHandler(h)
+for name in ["connectionpool", "stravalib"]:
+    logging.getLogger(name).setLevel(logging.ERROR)
 
 
 all_loggers = logging.Logger.manager.loggerDict
